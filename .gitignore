@@ -1,0 +1,8 @@
+# build output (premake + MSBuild)
+build/
+*.log
+
+# Visual Studio
+.vs/
+*.user
+*.suo
