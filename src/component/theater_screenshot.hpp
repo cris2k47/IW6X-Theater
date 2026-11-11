@@ -1,8 +1,9 @@
 #pragma once
 
 // BO2-style theater "SCREENSHOT": saves the next frame rendered without the theater HUD as a PNG in
-// <game>\theater\screenshots\<base_name>_<YYYY-MM-DD_HH-MM-SS>.png (the frame is read back from the
-// game's Direct3D 11 swap chain, the engine's own "screenshot" command does not write files in this build).
+// <Windows "Pictures" folder>\IW6X Theater\<base_name>_<YYYY-MM-DD_HH-MM-SS>.png, like the videos in
+// <Videos>\IW6X Theater (<game>\theater\screenshots if there is no Pictures folder). The frame is read back from the
+// game's Direct3D 11 swap chain, the engine's own "screenshot" command does not write files in this build.
 //
 // Integration (theater.cpp): skip theater_hud::draw() while hide_theater_hud() is true, call request()
 // from the screenshot button and poll take_result() once per frame to show "screenshot saved".

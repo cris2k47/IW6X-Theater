@@ -122,7 +122,7 @@ only hear the new position. At the end of the demo, while it stands still, nothi
 | `↓` / `↑` | speed in 0.2x steps like in BO2, but down to 0.1x: 0.1x, 0.2x, 0.4x, 0.6x … 6.0x. Also while paused (applied on resume) and while recording |
 | `←` / `→` | previous / next 10 s mark (forward up to the end of the recording) |
 | `R` | RECORD: start / stop a clip |
-| Hold `R` | SCREENSHOT: a capture without the panel in `theater\screenshots\` |
+| Hold `R` | SCREENSHOT: a capture without the panel in `Pictures\IW6X Theater` |
 | `F` | Free Roam: Attach To Object (follow the player in front of you) / Detach. Edit Camera Mode: insert a marker, or edit the highlighted marker (see section 4) |
 | `W A S D` + mouse | move and look with the free camera (it flies where you look) |
 | `E` / `Q` | up / down |
@@ -353,10 +353,10 @@ ghosts_game_files\
   theater\cameras\*.cam                camera markers per demo
   demos\client\user|auto\*.dm_iw6.pov  every player's view (demos recorded as the host)
   theater\clips\*.clip                 RECORD clips (the camera of every moment)
-  theater\screenshots\*.png            SCREENSHOT captures
   theater\theater.log                  the add-on's log (useful if something goes wrong)
 
 Videos\IW6X Theater\*.mp4              clip videos (your Windows user's Videos folder)
+Pictures\IW6X Theater\*.png            SCREENSHOT captures (your Windows user's Pictures folder)
 ```
 
 ## Building from source

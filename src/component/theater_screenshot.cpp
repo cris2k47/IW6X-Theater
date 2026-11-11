@@ -12,6 +12,7 @@
 #include "utils/thread.hpp"
 
 #include <dxgi.h>
+#include <shlobj.h>
 #include <wincodec.h>
 #include <wrl/client.h>
 
@@ -687,6 +688,26 @@ namespace theater_screenshot
 			return std::format("{:04}-{:02}-{:02}_{:02}-{:02}-{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
 		}
 
+		// FOLDERID_Pictures {33E28130-4E1E-4676-835A-98395C3BC3BB} (KnownFolders.h), local copy: no uuid.lib dependency
+		constexpr GUID PICTURES_FOLDER{0x33e28130, 0x4e1e, 0x4676, {0x83, 0x5a, 0x98, 0x39, 0x5c, 0x3b, 0xc3, 0xbb}};
+
+		// <Windows "Pictures" known folder>\IW6X Theater, next to the videos in <Videos>\IW6X Theater
+		// (<game>\theater\screenshots if Windows has no Pictures folder); save_png creates it
+		std::filesystem::path screenshots_folder()
+		{
+			std::filesystem::path base;
+
+			PWSTR known{};
+			if (SUCCEEDED(SHGetKnownFolderPath(PICTURES_FOLDER, KF_FLAG_CREATE, nullptr, &known)) && known)
+			{
+				base = known;
+			}
+
+			CoTaskMemFree(known);
+
+			return base.empty() ? console::get_theater_dir() / "screenshots" : base / "IW6X Theater";
+		}
+
 		std::string default_name()
 		{
 			try
@@ -800,7 +821,7 @@ namespace theater_screenshot
 
 		try
 		{
-			pending_base = console::get_theater_dir() / "screenshots" / (sanitize_name(base_name) + "_" + timestamp());
+			pending_base = screenshots_folder() / (sanitize_name(base_name) + "_" + timestamp());
 		}
 		catch (const std::exception& e)
 		{
