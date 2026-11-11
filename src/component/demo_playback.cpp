@@ -51,6 +51,49 @@ namespace // demo class
 	// iw6-theater: internal restarts (repeat), see demo_playback::restarts()
 	std::uint32_t restart_count{};
 
+	// iw6-theater: a rewind restarts the demo from its first snapshot and runs it forward to the target. The HUD must not
+	// see the snapshots on the way: their omnvar updates reach the LUI as if the match replayed. The demo's first
+	// snapshot is in the pre-match countdown, so "Match begins in:" (matchstarthud.lua, ui_match_start_countdown) showed
+	// for two frames after every jump back in the spectator view (seen in game) until the target's update hid it again.
+	// The omnvar updates of those snapshots are skipped and the target gets one update from the snapshot the HUD saw
+	// before the restart, as if the film had jumped there. CG_UpdateOmnvars compares the global omnvars with the client's
+	// cached values (left at the pre-rewind state while the updates are skipped) and the playerState ones with the old
+	// snapshot, so the pre-rewind snapshot is kept for the comparison.
+	constexpr std::int32_t REWIND_HUD_LANDED_MSEC = 100;        // a snapshot this close to the target (or past it) has landed
+	constexpr std::chrono::milliseconds REWIND_HUD_TIMEOUT{2000}; // the updates are never held back longer than this
+
+	struct rewind_hud_t
+	{
+		bool pending{};
+		bool have_base{};
+		std::uint32_t restarts_at_request{};
+		std::int32_t target{};
+		std::chrono::steady_clock::time_point requested{};
+		game::mp::snapshot_t base{}; // the last snapshot the HUD saw before the restart
+	};
+
+	rewind_hud_t rewind_hud{};
+
+	void arm_rewind_hud(const std::int32_t target)
+	{
+		// a second rewind before the first one landed keeps the snapshot the HUD saw before the first one
+		if (!rewind_hud.pending)
+		{
+			rewind_hud.have_base = false;
+		}
+
+		rewind_hud.pending = true;
+		rewind_hud.restarts_at_request = restart_count;
+		rewind_hud.target = target;
+		rewind_hud.requested = std::chrono::steady_clock::now();
+	}
+
+	void reset_rewind_hud()
+	{
+		rewind_hud.pending = false;
+		rewind_hud.have_base = false;
+	}
+
 	demo_playback_t::demo_playback_t()
 	{
 		buffer_.reserve(MAX_SIZE);
@@ -102,6 +145,7 @@ namespace // demo class
 			if (const auto delta_time = snap_svr_time - static_cast<std::int32_t>(*msec) - 50; delta_time > 0)
 			{
 				rewind_snap_svr_time_ = delta_time;
+				arm_rewind_hud(delta_time);
 			}
 		}
 
@@ -182,6 +226,7 @@ namespace // demo class
 		pred_data_index_ = {};
 		pred_data_.fill({});
 		rewind_snap_svr_time_ = {};
+		reset_rewind_hud();
 		gs_.reset();
 		buffer_.clear();
 		file_.clear();
@@ -527,6 +572,26 @@ namespace // hooks
 				assert(std::string_view(*reinterpret_cast<const char**>(game::Omnvar_GetDef(194))) == "ui_alien_show_eog_score");
 				new_snap.omnvars[194] = {};
 			}
+		}
+
+		// iw6-theater: the snapshots between a rewind's restart and its target never reach the HUD (see rewind_hud)
+		if (rewind_hud.pending && demo.is_demo_playing() && restart_count != rewind_hud.restarts_at_request)
+		{
+			if (!rewind_hud.have_base)
+			{
+				rewind_hud.base = old_snap;
+				rewind_hud.have_base = true;
+			}
+
+			const auto timed_out = std::chrono::steady_clock::now() - rewind_hud.requested > REWIND_HUD_TIMEOUT;
+			if (!timed_out && new_snap.serverTime < rewind_hud.target - REWIND_HUD_LANDED_MSEC)
+			{
+				return;
+			}
+
+			reset_rewind_hud();
+			CG_UpdateOmnvars_hook.invoke<void>(client_num, &rewind_hud.base, &new_snap);
+			return;
 		}
 
 		CG_UpdateOmnvars_hook.invoke<void>(client_num, &old_snap, &new_snap);
