@@ -8,7 +8,8 @@ same keyboard and controller controls as the BO2 theater on PC (Plutonium T6):
 - **Watch any player** (bots included) in **1st person** or **3rd person**, like BO2's `◄ name ►` selector.
 - **Free camera** with BO2's three modes: **Free Roam** (with "Attach To Object"), **Edit Camera Mode** (markers drawn like in BO2: cameras with their colored cone, number, time and path) and **Dolly Camera**.
 - **RECORD**: records clips with the camera you are using and, when you save them, turns them into **MP4 videos** in `Videos\IW6X Theater`, at the fps you choose and perfectly smooth.
-- A **THEATER** entry in the main menu with the list of your demos.
+- A **THEATER** entry in the main menu with the list of your demos and a **Settings** menu (game recording, videos,
+  free camera). Like in BO2, **GAME RECORDING** (on by default) is also in the private match lobby.
 
 The demo system (recording and playback) is **Anomaly's (Caball009)**, published under GPL-3.0 at
 [git.alterware.dev/anomaly/iw6-mod](https://git.alterware.dev/anomaly/iw6-mod). Here it is ported to a DLL that loads
@@ -45,14 +46,20 @@ and `theater\`.
 
 ## 1. Recording
 
-Open the console (`~`) during a match:
+**GAME RECORDING** is on by default, like in BO2: every match you play is recorded automatically, on any server, not
+only in private matches. You can switch it off or on in main menu → **THEATER** → **Settings** and at the bottom of
+the **PRIVATE MATCH** lobby. It is the console's `demoautorecord` and it is saved in your config, so
+if you used an older version of the theater, your config keeps the OFF it had then: switch it on once in Settings.
+Automatic demos pile up in `demos\client\auto\`: delete the ones you do not want.
+
+To record only some matches, switch GAME RECORDING off and use the console (`~`) during a match:
 
 | Command | What it does |
 |---|---|
 | `demostart` | starts recording with an automatic name |
 | `demostart myname` | records as `myname` (add `overwrite` to overwrite it) |
 | `demostop` | stops and saves |
-| `set demoautorecord 1` | records **every** match **automatically** (like BO2). Saved in your config |
+| `set demoautorecord 0` / `1` | GAME RECORDING off / on (records **every** match **automatically**, like BO2; on by default). Saved in your config |
 
 You can run `demostart` in the middle of a match: the demo contains the whole match from the moment you joined.
 
@@ -71,6 +78,28 @@ Those demos go to `demos\server\`. Bots cannot be recorded this way.
 
 The map loads without a server and the demo starts playing. The theater's timeline appears at the bottom.
 
+### Theater settings
+
+In the THEATER menu, **Settings** (X on the controller, `F2` on the keyboard, or click it) opens **THEATER SETTINGS**.
+While you watch a film, the game menu (`Esc` / Start) also has **THEATER SETTINGS**, below OPTIONS, so you can change
+the free camera or the videos without leaving the film. Up / Down choose an option, Left / Right change it (A, `Enter`
+or a click also switch the ON / OFF ones) and B / `Esc` goes back. Every change is saved in your config at once and
+applies right away.
+
+| Option | Console | What it does |
+|---|---|---|
+| GAME RECORDING | `demoautorecord` | records every match automatically (default ON) |
+| RECORD ALL PLAYERS | `theater_pov_record` | as the host, also saves every player's view, see *Watching other players* (default ON) |
+| SAVE VIDEO WITH CLIPS | `theater_video_on_save` | makes the MP4 when you save a clip (default ON) |
+| VIDEO FRAME RATE | `theater_video_fps` | 24 to 240 fps (default 60) |
+| VIDEO QUALITY | `theater_video_quality` | LOW, MEDIUM, HIGH (default), ULTRA or MAX. The bitrate follows your window size and the frame rate, and the menu shows it, for example HIGH (26 MBPS) at 1600×900 and 60 fps |
+| FREE CAMERA SPEED | `theater_freecam_speed` | 50 to 5000 (default 250) |
+| FREE CAMERA SENSITIVITY | `theater_mouse_scale` | mouse sensitivity of the free camera, 0.25x to 3x (default 1x) |
+
+A value typed in the console shows as it is, and Left / Right then jump to the nearest value of the list. The free
+camera speed you change while watching (mouse wheel, keys) lasts until you close the game; the one in Settings is the
+saved one.
+
 ## 3. Controls (the same as in Black Ops 2)
 
 The panel copies the BO2 theater's ("MODE: Film Editor"), measured in Plutonium T6:
@@ -87,9 +116,11 @@ The panel copies the BO2 theater's ("MODE: Film Editor"), measured in Plutonium 
 ```
 
 - At the top: **F4 Toggle Controls** (hides the whole panel) and **F2 Toggle Hud** (hides the game HUD: in third person
-  and in the free camera, the players' names). Like in BO2, Ghosts' "SPECTATING" text never shows, even if the player
-  who recorded the demo was spectating. In **Edit Camera Mode** the center shows **F Insert Camera Marker** /
-  **F Edit Camera Marker** (with a highlighted marker, see section 4), and in Free Roam **F Attach To Object**.
+  and in the free camera, the players' names). With the HUD hidden, `Esc` / Start still open the game menu: the HUD
+  shows while the menu is open and hides again when you close it. Like in BO2, Ghosts' "SPECTATING" text never shows,
+  even if the player who recorded the demo was spectating. In **Edit Camera Mode** the center shows
+  **F Insert Camera Marker** / **F Edit Camera Marker** (with a highlighted marker, see section 4), and in Free Roam
+  **F Attach To Object**.
 - Top row: the **player you are watching** between the left and right click icons (in the free camera, the mode:
   *Free Roam Mode*, *Dolly Camera* or *Edit Camera Mode*) and **MODE: Film Editor**.
 - Timeline: the current time above the marker, marks every 10 s and the total length. If the demo has every player's
@@ -258,10 +289,13 @@ second, however long your PC takes to draw and save it. That is why the video is
 game runs slowly while it records (it just takes longer). The default is **60 fps**. Use 120 or more to slow it down
 later in an editor, or 30 if you want smaller files.
 
+The fps, the quality and whether clips make a video are also in THEATER → **Settings**.
+
 | Setting | What it does |
 |---|---|
 | `set theater_video_fps <n>` | fps of the videos (10–240, default 60; saved) |
-| `set theater_video_bitrate <Mbps>` | quality in Mbps (0 = automatic: about 26 Mbps at 1600×900 and 60 fps, 37 at 1080p; at most 150; saved) |
+| `set theater_video_quality <0-4>` | quality preset: 0 LOW, 1 MEDIUM, 2 HIGH (default), 3 ULTRA, 4 MAX. The bitrate is width × height × fps × 0.1 / 0.2 / 0.3 / 0.5 / 0.8 bits (HIGH: about 26 Mbps at 1600×900 and 60 fps, 37 at 1080p), between 8 and 150 Mbps; saved |
+| `set theater_video_bitrate <Mbps>` | a fixed bitrate instead of the preset (8–150; Settings shows it as CUSTOM). `0` (default) uses the preset; saved |
 | `set theater_video_on_save 0` | save clips without making the video |
 | `theater_render <clip>` | make (or remake, for example with other fps) the video of a saved clip |
 | `theater_render_cancel` | cancel the video in progress |
@@ -348,7 +382,7 @@ Anomaly's original commands are still available: `demoplay`, `demoforward`, `dem
 ```
 ghosts_game_files\
   XINPUT1_3.dll                        the add-on
-  iw6\ui_scripts\theater\__init__.lua  THEATER menu
+  iw6\ui_scripts\theater\__init__.lua  THEATER menu, its Settings and the lobby's GAME RECORDING
   demos\client\user|auto\*.dm_iw6      demos
   theater\cameras\*.cam                camera markers per demo
   demos\client\user|auto\*.dm_iw6.pov  every player's view (demos recorded as the host)

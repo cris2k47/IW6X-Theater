@@ -83,7 +83,11 @@ namespace theater_video
 		constexpr std::uint64_t TICKS_PER_SECOND = 10'000'000; // Media Foundation time unit: 100 ns
 		constexpr double MIN_BITRATE = 8e6;
 		constexpr double MAX_BITRATE = 150e6;
-		constexpr double AUTO_BITS_PER_PIXEL = 0.3; // automatic bitrate: width * height * fps * 0.3 bits per second
+		// quality presets (theater_video_quality) used while theater_video_bitrate is 0: bits per pixel of every frame, so
+		// the bitrate follows the video size and the fps. The THEATER SETTINGS menu (lui\theater\__init__.lua) shows the
+		// same table: low, medium, high (the default, the automatic bitrate of earlier versions), ultra, max
+		constexpr std::array QUALITY_BITS_PER_PIXEL{0.1, 0.2, 0.3, 0.5, 0.8};
+		constexpr int DEFAULT_VIDEO_QUALITY = 2;
 		constexpr int DEFAULT_TEST_FPS = 60;
 
 		// progress bar colors (linear RGBA, ClearView converts for _SRGB views)
@@ -552,7 +556,8 @@ namespace theater_video
 			int skip_frames{};
 			UINT expected_width{};  // engine window table, the encoder is set up for this size by start()
 			UINT expected_height{};
-			int bitrate_mbps{};     // theater_video_bitrate, 0 = automatic
+			int bitrate_mbps{};     // theater_video_bitrate, 0 = from the quality preset
+			int quality{DEFAULT_VIDEO_QUALITY}; // theater_video_quality
 
 			std::atomic<state> st{state::capturing};
 			std::atomic<std::uint64_t> frames_written{0};
@@ -589,6 +594,7 @@ namespace theater_video
 		std::atomic_bool render_needed{false};    // the current session's render side has not finished yet
 		std::atomic<float> progress{-1.0f};
 		game::dvar_t* bitrate_dvar{};
+		game::dvar_t* quality_dvar{};
 
 		std::shared_ptr<session> get_session()
 		{
@@ -1116,11 +1122,13 @@ namespace theater_video
 			bool has_samples{};
 		};
 
-		std::uint32_t choose_bitrate(const UINT width, const UINT height, const int fps, const int mbps)
+		std::uint32_t choose_bitrate(const UINT width, const UINT height, const int fps, const int mbps, const int quality)
 		{
+			const auto preset = std::clamp(quality, 0, static_cast<int>(QUALITY_BITS_PER_PIXEL.size()) - 1);
+			const auto bits_per_pixel = QUALITY_BITS_PER_PIXEL[static_cast<std::size_t>(preset)];
 			const auto bits = mbps > 0
 				                  ? static_cast<double>(mbps) * 1e6
-				                  : std::round(static_cast<double>(width) * height * fps * AUTO_BITS_PER_PIXEL);
+				                  : std::round(static_cast<double>(width) * height * fps * bits_per_pixel);
 			return static_cast<std::uint32_t>(std::clamp(bits, MIN_BITRATE, MAX_BITRATE));
 		}
 
@@ -1283,7 +1291,7 @@ namespace theater_video
 		{
 			e.width = width & ~1u;
 			e.height = height & ~1u;
-			e.bitrate = choose_bitrate(e.width, e.height, s.fps, s.bitrate_mbps);
+			e.bitrate = choose_bitrate(e.width, e.height, s.fps, s.bitrate_mbps, s.quality);
 
 			std::string hardware_error;
 			if (create_writer(s, e, true, hardware_error))
@@ -1967,6 +1975,7 @@ namespace theater_video
 		s->expected_width = width;
 		s->expected_height = height;
 		s->bitrate_mbps = bitrate_dvar ? bitrate_dvar->current.integer : 0;
+		s->quality = quality_dvar ? quality_dvar->current.integer : DEFAULT_VIDEO_QUALITY;
 		s->last_progress = std::chrono::steady_clock::now();
 
 		const auto frame_bytes = static_cast<std::size_t>(width) * height * 4;
@@ -2001,7 +2010,7 @@ namespace theater_video
 			}
 		}
 
-		const auto bitrate = choose_bitrate(width & ~1u, height & ~1u, fps, s->bitrate_mbps);
+		const auto bitrate = choose_bitrate(width & ~1u, height & ~1u, fps, s->bitrate_mbps, s->quality);
 		std::string description;
 		{
 			std::lock_guard lock(s->mutex);
@@ -2147,7 +2156,11 @@ namespace theater_video
 			// description), e.g. FUN_1404fb1d0 ("friendsWidgetMinimumRefreshTimer", 30000, 0, 0x7fffffff, 0, ...) and
 			// FUN_14039fd20 ("scr_%s_scorelimit", 0, INT_MIN, INT_MAX, 0x180, "script score limit")
 			bitrate_dvar = game::Dvar_RegisterInt("theater_video_bitrate", 0, 0, 150, game::DVAR_FLAG_SAVED,
-			                                      "Theater video bitrate in Mbps (0 = automatic: width x height x fps x 0.3 bits; 8..150)");
+			                                      "Theater video bitrate in Mbps (0 = from theater_video_quality, the video size and the fps; 8..150)");
+			quality_dvar = game::Dvar_RegisterInt("theater_video_quality", DEFAULT_VIDEO_QUALITY, 0, static_cast<int>(QUALITY_BITS_PER_PIXEL.size()) - 1,
+			                                      game::DVAR_FLAG_SAVED,
+			                                      "Theater video quality while theater_video_bitrate is 0: 0 low, 1 medium, 2 high, 3 ultra, 4 max "
+			                                      "(width x height x fps x 0.1 / 0.2 / 0.3 / 0.5 / 0.8 bits per second)");
 
 			add_commands();
 			scheduler::loop(on_frame, scheduler::pipeline::renderer);

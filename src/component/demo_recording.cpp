@@ -711,7 +711,7 @@ namespace demo_recording
 
 			// add support to auto record
 			demo_autorecord = game::Dvar_RegisterBool(
-				"demoautorecord", false, game::DVAR_FLAG_SAVED, "Automatically start recording a demo."); // iw6-theater: saved
+				"demoautorecord", true, game::DVAR_FLAG_SAVED, "Automatically start recording a demo."); // iw6-theater: saved, on by default (GAME RECORDING)
 
 			// add console command support to record demos
 			command::add("demostart", execute_demo_start_command);

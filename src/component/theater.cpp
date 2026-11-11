@@ -104,6 +104,7 @@ namespace theater
 
 		game::dvar_t* theater_freecam_speed{};
 		game::dvar_t* theater_hud{};
+		game::dvar_t* theater_film{}; // read only: 1 while a film plays (the LUI pause menu then offers THEATER SETTINGS)
 		game::dvar_t* theater_mouse_scale{};
 
 		view_mode view = view_mode::first_person;
@@ -1300,6 +1301,57 @@ namespace theater
 			if (auto* dvar = find_dvar("cg_draw2D"))
 			{
 				set_bool_dvar("cg_draw2D", !dvar->current.enabled);
+			}
+		}
+
+		// With the HUD off (cg_draw2D 0) the engine does not run the game's LUI at all: Esc / START would open the Start
+		// menu only once the HUD is back on (the key waits in the LUI queue), so the menu could not be seen. While the HUD
+		// is off, Esc / START turn cg_draw2D on until that menu is closed again (or did not open after all).
+		constexpr auto HUD_FOR_MENU_TIMEOUT = 1500ms;
+
+		struct
+		{
+			bool on{};        // cg_draw2D was turned on for a menu
+			bool menu_seen{}; // the menu has opened since
+			std::chrono::steady_clock::time_point since{};
+		} hud_for_menu;
+
+		bool menu_open()
+		{
+			return (*game::keyCatchers & ~1) != 0; // menus set key catchers; 1 is the console
+		}
+
+		void show_hud_for_menu()
+		{
+			const auto* dvar = find_dvar("cg_draw2D");
+			if (hud_for_menu.on || !dvar || dvar->current.enabled)
+			{
+				return;
+			}
+
+			set_bool_dvar("cg_draw2D", true);
+			hud_for_menu.on = true;
+			hud_for_menu.menu_seen = false;
+			hud_for_menu.since = std::chrono::steady_clock::now();
+		}
+
+		void update_hud_for_menu()
+		{
+			if (!hud_for_menu.on)
+			{
+				return;
+			}
+
+			if (menu_open())
+			{
+				hud_for_menu.menu_seen = true;
+				return;
+			}
+
+			if (hud_for_menu.menu_seen || std::chrono::steady_clock::now() - hud_for_menu.since > HUD_FOR_MENU_TIMEOUT)
+			{
+				set_bool_dvar("cg_draw2D", false);
+				hud_for_menu = {};
 			}
 		}
 
@@ -2660,6 +2712,12 @@ namespace theater
 				{
 					return;
 				}
+
+				// Esc goes on to the game, which opens the Start menu: with the HUD off it needs cg_draw2D
+				if (down != 0 && !repeat && k == game::K_ESCAPE)
+				{
+					show_hud_for_menu();
+				}
 			}
 			else
 			{
@@ -2779,6 +2837,12 @@ namespace theater
 			const auto& polled = theater_gamepad::poll();
 			const auto& pad = ui_has_focus() ? no_input : polled;
 			handle_gamepad(pad);
+
+			// START goes on to the game, which opens the Start menu: with the HUD off it needs cg_draw2D
+			if (pad.down(theater_gamepad::START) && !rendering())
+			{
+				show_hud_for_menu();
+			}
 
 			update_hold(record_key_down, record_key_fired);
 			update_render();
@@ -2960,6 +3024,11 @@ namespace theater
 			// no "SPECTATING" while a demo plays (BO2); set before the demo's map builds its HUD
 			spectating_text_hidden = playing;
 
+			if (theater_film)
+			{
+				theater_film->current.enabled = playing;
+			}
+
 			// a backward seek's frames are presented again once the demo has restarted and is back at the target: active,
 			// with the snapshot around the target (right after the restart the time can already be there while the
 			// snapshot is still the demo's start). Two more frames stay held for the render thread's delay. Given up after
@@ -3003,6 +3072,7 @@ namespace theater
 			else if (!playing && was_active)
 			{
 				reset_session();
+				hud_for_menu = {}; // restore_dvars puts cg_draw2D back as it was before the film
 				restore_dvars();
 				restore_stats();
 				info = {};
@@ -3015,6 +3085,7 @@ namespace theater
 			const auto now_active = active();
 			if (now_active)
 			{
+				update_hud_for_menu();
 				apply_view_dvars();
 
 				// like BO2: hold on the last frame instead of leaving the match when the recording ends
@@ -3450,6 +3521,8 @@ namespace theater
 			theater_mouse_scale = game::Dvar_RegisterFloat("theater_mouse_scale", 1.0f, 0.05f, 10.0f, game::DVAR_FLAG_SAVED,
 			                                               "Free camera mouse sensitivity multiplier");
 			theater_hud = game::Dvar_RegisterBool("theater_hud", true, game::DVAR_FLAG_NONE, "Show the theater controls during demo playback");
+			theater_film = game::Dvar_RegisterBool("theater_film", false, game::DVAR_FLAG_READ,
+			                                       "1 while a film (demo) plays: the Start menu then has THEATER SETTINGS");
 			theater_video_fps = game::Dvar_RegisterInt("theater_video_fps", 60, 10, 240, game::DVAR_FLAG_SAVED,
 			                                           "Frame rate of the videos rendered from clips (Videos\\IW6X Theater)");
 			theater_video_on_save = game::Dvar_RegisterBool("theater_video_on_save", true, game::DVAR_FLAG_SAVED,
