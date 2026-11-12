@@ -1296,14 +1296,6 @@ namespace theater
 			}
 		}
 
-		void toggle_game_hud()
-		{
-			if (auto* dvar = find_dvar("cg_draw2D"))
-			{
-				set_bool_dvar("cg_draw2D", !dvar->current.enabled);
-			}
-		}
-
 		// With the HUD off (cg_draw2D 0) the engine does not run the game's LUI at all: Esc / START would open the Start
 		// menu only once the HUD is back on (the key waits in the LUI queue), so the menu could not be seen. While the HUD
 		// is off, Esc / START turn cg_draw2D on until that menu is closed again (or did not open after all).
@@ -1316,6 +1308,27 @@ namespace theater
 			std::chrono::steady_clock::time_point since{};
 		} hud_for_menu;
 
+		// F2 / B "Toggle Hud". cg_draw2D is a cheat dvar: the engine puts it back to its default every time the demo
+		// restarts (each backward seek, also the seek to the start of a clip before a video render), so the choice is
+		// kept here and applied again every frame, like the camera dvars in apply_view_dvars
+		bool game_hud_hidden = false;
+
+		void apply_game_hud()
+		{
+			const auto* dvar = find_dvar("cg_draw2D");
+			const auto shown = hud_for_menu.on || !game_hud_hidden;
+			if (dvar && dvar->current.enabled != shown)
+			{
+				set_bool_dvar("cg_draw2D", shown);
+			}
+		}
+
+		void toggle_game_hud()
+		{
+			game_hud_hidden = !game_hud_hidden;
+			apply_game_hud();
+		}
+
 		bool menu_open()
 		{
 			return (*game::keyCatchers & ~1) != 0; // menus set key catchers; 1 is the console
@@ -1323,16 +1336,15 @@ namespace theater
 
 		void show_hud_for_menu()
 		{
-			const auto* dvar = find_dvar("cg_draw2D");
-			if (hud_for_menu.on || !dvar || dvar->current.enabled)
+			if (hud_for_menu.on || !game_hud_hidden)
 			{
 				return;
 			}
 
-			set_bool_dvar("cg_draw2D", true);
 			hud_for_menu.on = true;
 			hud_for_menu.menu_seen = false;
 			hud_for_menu.since = std::chrono::steady_clock::now();
+			apply_game_hud();
 		}
 
 		void update_hud_for_menu()
@@ -1350,8 +1362,8 @@ namespace theater
 
 			if (hud_for_menu.menu_seen || std::chrono::steady_clock::now() - hud_for_menu.since > HUD_FOR_MENU_TIMEOUT)
 			{
-				set_bool_dvar("cg_draw2D", false);
 				hud_for_menu = {};
+				apply_game_hud();
 			}
 		}
 
@@ -2985,6 +2997,7 @@ namespace theater
 			last_pose_valid = false;
 			world::set_hidden_player(-1);
 			world::set_force_local_body(false);
+			game_hud_hidden = false;
 
 			// the camera model of the markers belongs to the map: free it (after the render thread is done with it)
 			markers::reset();
@@ -3086,6 +3099,7 @@ namespace theater
 			if (now_active)
 			{
 				update_hud_for_menu();
+				apply_game_hud();
 				apply_view_dvars();
 
 				// like BO2: hold on the last frame instead of leaving the match when the recording ends
