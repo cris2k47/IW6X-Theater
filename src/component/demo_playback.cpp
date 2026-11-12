@@ -74,6 +74,21 @@ namespace // demo class
 
 	rewind_hud_t rewind_hud{};
 
+	// A seek runs the server commands of the skipped part of the film in the frame it lands, the vision set changes among
+	// them, and each of those started its lerp there. A rewind restarts the demo from its beginning, so that was the black
+	// and white 'mpIntro' of the pre-match followed by the return to the map's own vision set with the lerp the server
+	// asked for: a grey picture that took about 2.5 s to get its color back after every jump back, also at the start of
+	// a rendered clip (seen in game). While a rewind is in flight, and for a few frames after a seek, vision set changes
+	// are applied at once (handle_vision_override, handle_client_side_vision).
+	constexpr std::int32_t SEEK_VISION_FRAMES = 8;      // client frames after a seek
+	constexpr std::int32_t SEEK_VISION_MIN_MSEC = 1000; // a shorter step forward plays its vision set changes as recorded
+	std::int32_t seek_vision_frames{};
+
+	bool seek_vision_instant()
+	{
+		return rewind_hud.pending || seek_vision_frames > 0;
+	}
+
 	void arm_rewind_hud(const std::int32_t target)
 	{
 		// a second rewind before the first one landed keeps the snapshot the HUD saw before the first one
@@ -227,6 +242,7 @@ namespace // demo class
 		pred_data_.fill({});
 		rewind_snap_svr_time_ = {};
 		reset_rewind_hud();
+		seek_vision_frames = {};
 		gs_.reset();
 		buffer_.clear();
 		file_.clear();
@@ -277,6 +293,7 @@ namespace // demo class
 namespace // hooks
 {
 	utils::hook::detour CG_UpdateOmnvars_hook;
+	utils::hook::detour CG_VisionSetClientSide_hook; // not the engine's name, which is unknown
 	utils::hook::detour CG_VisionSetStartLerp_To_hook;
 	utils::hook::detour CL_GetPredictedPlayerInformationForServerTime_hook;
 	utils::hook::detour CL_GetPredictedVehicleForServerTime_hook;
@@ -309,6 +326,11 @@ namespace // hooks
 	{
 		if (demo.is_demo_playing())
 		{
+			if (seek_vision_instant() && duration > 1)
+			{
+				duration = 1; // a change the seek skipped: no lerp from where the film lands (1 as in handle_vision)
+			}
+
 			const auto vision_set = static_cast<std::size_t>((demo_vision) ? demo_vision->current.integer : 0);
 
 			if (vision_set == 1)
@@ -345,6 +367,21 @@ namespace // hooks
 		}
 
 		return CG_VisionSetStartLerp_To_hook.invoke<bool>(&cvs_data, index, vision_name, duration, time);
+	}
+
+	// The client side vision set is the map's own one, picked by its client triggers (this runs every frame, and does
+	// nothing while the vision set stays the same). A named vision set from the server switches it off (the black and
+	// white 'mpIntro' of the pre-match), an empty name switches it on again with the lerp time the server gives (3 s seen
+	// in game). A negative duration keeps the time of the trigger. It never passes through CG_VisionSetStartLerp_To.
+	void handle_client_side_vision(const std::int32_t client_num, const std::int32_t index, const std::int32_t trigger_from,
+		const std::int32_t trigger_to, const float blend, std::int32_t duration)
+	{
+		if (demo.is_demo_playing() && seek_vision_instant())
+		{
+			duration = 0; // see seek_vision_frames
+		}
+
+		CG_VisionSetClientSide_hook.invoke<void>(client_num, index, trigger_from, trigger_to, blend, duration);
 	}
 
 	void handle_vision()
@@ -453,6 +490,11 @@ namespace // hooks
 				// reset cl->newSnapshots to prevent CL_SetCGameTime from making a call to CL_AdjustTimeDelta,
 				// which interferes with the timescale
 				game::mp::cl->newSnapshots = 0;
+
+				if (seek_vision_frames > 0)
+				{
+					--seek_vision_frames;
+				}
 			}
 
 			CL_SetCGameTime_hook.invoke<void>(client_num);
@@ -590,6 +632,7 @@ namespace // hooks
 			}
 
 			reset_rewind_hud();
+			seek_vision_frames = SEEK_VISION_FRAMES; // the server commands of the landing can still follow this call
 			CG_UpdateOmnvars_hook.invoke<void>(client_num, &rewind_hud.base, &new_snap);
 			return;
 		}
@@ -886,6 +929,11 @@ namespace // command execution
 
 		if (demo.is_demo_playing())
 		{
+			if (msec >= SEEK_VISION_MIN_MSEC)
+			{
+				seek_vision_frames = SEEK_VISION_FRAMES;
+			}
+
 			fast_forward_demo(static_cast<std::uint32_t>(msec));
 		}
 		else
@@ -966,6 +1014,7 @@ namespace demo_playback
 
 			// allow user to override visual settings
 			CG_VisionSetStartLerp_To_hook.create(0x1402A3200, handle_vision_override);
+			CG_VisionSetClientSide_hook.create(0x140296CA0, handle_client_side_vision);
 			demo_vision = game::Dvar_RegisterEnum(
 				"demovision", const_cast<const char**>(VISION_SETS.data()), 0, game::DVAR_FLAG_NONE, "Override vision set for demos");
 
