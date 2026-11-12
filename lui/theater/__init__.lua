@@ -790,3 +790,31 @@ if not Engine.InFrontend() and pause_menu and type( pause_menu.options_def ) == 
 		return list
 	end
 end
+
+-- ------------------------------------------------------------------ feed of a film
+
+-- A seek leaves on screen the kills and messages the feed was showing, which belong to the moment the film left (a
+-- video rendered with the HUD on began with them). The add-on sends "theater_feed_clear" when a seek starts and the
+-- feed closes its lines. The lines of the part of the film the seek skips never get here (the add-on drops them).
+local hud_types = LUI.MenuBuilder.m_types
+local feed_def = hud_types and hud_types[ "obituaryHudDef" ]
+if not Engine.InFrontend() and type( feed_def ) == "function" then
+	hud_types[ "obituaryHudDef" ] = function ( ... )
+		local feed = feed_def( ... )
+
+		local ok, err = pcall( function ()
+			feed:registerEventHandler( "theater_feed_clear", function ( element, event )
+				local list = element:getFirstDescendentById( "obituaryVLId" )
+				if list then
+					list:closeChildren()
+				end
+			end )
+		end )
+
+		if not ok then
+			print( "theater: " .. tostring( err ) )
+		end
+
+		return feed
+	end
+end

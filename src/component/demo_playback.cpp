@@ -89,12 +89,69 @@ namespace // demo class
 		return rewind_hud.pending || seek_vision_frames > 0;
 	}
 
+	// The same goes for the feed of kills and game messages (obituaryhud.lua): the lines of the skipped part of the film
+	// all showed up where the seek landed. After every jump back that was a column of "<name> Connected", sent with the
+	// demo's first snapshots, and after a jump forward the kills of the part that was skipped (seen in game). While a seek
+	// is in flight those lines never reach the HUD (handle_feed_message, handle_feed_obituary). A rewind is in flight
+	// until its target gets its omnvar update (rewind_hud), a jump forward until a snapshot around its target arrives:
+	// in both cases the server commands of that snapshot have just been executed (CG_SetNextSnap runs them first).
+	struct forward_seek_t
+	{
+		bool pending{};
+		std::int32_t target{};
+		std::chrono::steady_clock::time_point requested{};
+	};
+
+	forward_seek_t forward_seek{};
+
+	bool seek_skips_feed()
+	{
+		return rewind_hud.pending || forward_seek.pending;
+	}
+
+	// The lines the feed is showing when a seek starts belong to the moment the film leaves, and stayed on screen where
+	// it landed (a video rendered with the HUD on began with them). The add-on's LUI script closes them when it gets
+	// this event; without the script nobody handles it. An LUI event without fields is sent the way the engine sends
+	// its own (0x1401D0C50, "playerstate_client_changed"): the first call takes the LUI lock and counts the nesting,
+	// the second one runs the handlers.
+	void clear_feed()
+	{
+		auto* const lua_vm = *reinterpret_cast<void**>(0x141640DA0); // the LUI state CG_GameMessage sends its event to
+		if (!lua_vm || *game::mp::connstate != game::CA_ACTIVE || !game::CL_IsCgameInitialized())
+		{
+			return;
+		}
+
+		if (utils::hook::invoke<bool>(0x1401CBD90, 0, "theater_feed_clear", lua_vm))
+		{
+			utils::hook::invoke<void>(0x1401CCDE0, 3, lua_vm);
+
+			if (--*reinterpret_cast<std::int32_t*>(0x141640DB8) == 0)
+			{
+				*reinterpret_cast<std::uint8_t*>(0x141640E2C) = 0;
+				*reinterpret_cast<std::uint8_t*>(0x141640E2D) = 0;
+			}
+
+			utils::hook::invoke<void>(0x1404F9890, 0x2C); // Sys_LeaveCriticalSection, the LUI lock
+		}
+	}
+
+	void arm_forward_seek(const std::int32_t target)
+	{
+		clear_feed();
+
+		forward_seek.pending = true;
+		forward_seek.target = target;
+		forward_seek.requested = std::chrono::steady_clock::now();
+	}
+
 	void arm_rewind_hud(const std::int32_t target)
 	{
 		// a second rewind before the first one landed keeps the snapshot the HUD saw before the first one
 		if (!rewind_hud.pending)
 		{
 			rewind_hud.have_base = false;
+			clear_feed();
 		}
 
 		rewind_hud.pending = true;
@@ -151,6 +208,7 @@ namespace // demo class
 		// set demo end-of-file which will repeat the demo
 		repeat_ = true;
 		file_.seekg(0, std::ios::end);
+		forward_seek.pending = false; // the restart replaces a jump forward that has not landed
 
 		if (msec)
 		{
@@ -242,6 +300,7 @@ namespace // demo class
 		pred_data_.fill({});
 		rewind_snap_svr_time_ = {};
 		reset_rewind_hud();
+		forward_seek.pending = false;
 		seek_vision_frames = {};
 		gs_.reset();
 		buffer_.clear();
@@ -284,6 +343,7 @@ namespace // demo class
 		skip_timeout_ = {};
 		retain_timescale_ = {};
 		pred_data_index_ = {};
+		forward_seek.pending = false; // a jump forward that ran into the end of the demo
 
 		file_.clear();
 		file_.seekg(post_map_header_file_offset_, std::ios::beg);
@@ -300,6 +360,8 @@ namespace // hooks
 	utils::hook::detour CL_SetCGameTime_hook;
 	utils::hook::detour CL_WritePacket_hook;
 	utils::hook::detour GetRemoteEyeValues_hook;
+	utils::hook::detour LUI_FeedMessage_hook;  // not the engine's names, which are unknown: the functions that
+	utils::hook::detour LUI_FeedObituary_hook; // send the LUI its "game_message" and "obituary" events
 	utils::hook::detour LUI_IntermissionBegan_hook;
 	utils::hook::detour VehicleCam_UpdatePlayerControlCam_hook;
 
@@ -382,6 +444,101 @@ namespace // hooks
 		}
 
 		CG_VisionSetClientSide_hook.invoke<void>(client_num, index, trigger_from, trigger_to, blend, duration);
+	}
+
+	// The feed lines of the part of the film a seek skips (see seek_skips_feed): a game message (CG_GameMessage and
+	// CG_BoldGameMessage, the server's iprintln lines such as "<name> Connected") and a kill.
+	void handle_feed_message(const std::int32_t controller, const char* message, const bool bold, void* lua_vm)
+	{
+		if (demo.is_demo_playing() && seek_skips_feed())
+		{
+			return;
+		}
+
+		LUI_FeedMessage_hook.invoke<void>(controller, message, bold, lua_vm);
+	}
+
+	void handle_feed_obituary(const std::int32_t controller, const std::int32_t attacker, const std::int32_t victim,
+		void* icon, const bool flag, void* lua_vm)
+	{
+		if (demo.is_demo_playing() && seek_skips_feed())
+		{
+			return;
+		}
+
+		LUI_FeedObituary_hook.invoke<void>(controller, attacker, victim, icon, flag, lua_vm);
+	}
+
+	// The splashes are per-client omnvars: "First Blood!", an earned killstreak, a challenge (splasheshud.lua) and the
+	// team emblem with the objective when the match starts (matchstarthud.lua). CG_UpdateOmnvars tells the LUI about an
+	// omnvar whenever its time of change is not the one the client remembers, whatever happened in between: after a
+	// seek, or when another player's view is selected, the last splash of the skipped part came up again however long
+	// ago it had been ("First Blood!" minutes later, seen in game). A splash that is more than a second older than the
+	// snapshot that brings it is remembered without telling the LUI; while a film plays normally it arrives within a
+	// snapshot or two.
+	constexpr std::array<std::string_view, 5> SPLASH_OMNVARS{
+		"ui_splash_idx", "ui_splash_killstreak_idx", "ui_splash_playercard_idx", "ui_challenge_splash_idx", "ui_objective_text",
+	};
+	constexpr std::int32_t SPLASH_MAX_AGE_MSEC = 1000;
+	constexpr std::uintptr_t OMNVAR_GLOBAL_COUNT = 0x147A5FA10; // the snapshot's omnvars are [global | per client]
+	constexpr std::uintptr_t OMNVAR_CLIENT_COUNT = 0x147A5FA14;
+	constexpr std::uintptr_t OMNVAR_CLIENT_CACHE = 0x147A63280; // OmnvarData the client remembers, indexed like the snapshot's
+
+	// snapshot indices of SPLASH_OMNVARS, by name from the game's omnvar definitions (name pointer first)
+	std::span<const std::size_t> splash_omnvar_indices()
+	{
+		static std::array<std::size_t, SPLASH_OMNVARS.size()> indices{};
+		static std::size_t count = 0;
+		static auto resolved = false;
+
+		if (!resolved)
+		{
+			resolved = true;
+
+			const auto global = *reinterpret_cast<const std::int32_t*>(OMNVAR_GLOBAL_COUNT);
+			const auto client = *reinterpret_cast<const std::int32_t*>(OMNVAR_CLIENT_COUNT);
+			if (global < 0 || client <= 0 || global + client > static_cast<std::int32_t>(std::extent_v<decltype(game::mp::snapshot_t::omnvars)>))
+			{
+				return {};
+			}
+
+			for (auto i = global; i < global + client && count < indices.size(); ++i)
+			{
+				const auto* def = game::Omnvar_GetDef(i);
+				const auto* name = def && utils::hook::is_readable(def, sizeof(const char*)) ? *static_cast<const char* const*>(def) : nullptr;
+				if (!name || !utils::hook::is_readable(name, 64))
+				{
+					count = 0;
+					break;
+				}
+
+				if (std::ranges::find(SPLASH_OMNVARS, std::string_view(name, strnlen(name, 64))) != SPLASH_OMNVARS.end())
+				{
+					indices[count++] = static_cast<std::size_t>(i);
+				}
+			}
+		}
+
+		return {indices.data(), count};
+	}
+
+	void forget_stale_splashes(const std::int32_t client_num, const game::mp::snapshot_t& new_snap)
+	{
+		if (client_num != 0)
+		{
+			return;
+		}
+
+		auto* const remembered = reinterpret_cast<game::mp::OmnvarData*>(OMNVAR_CLIENT_CACHE);
+		for (const auto index : splash_omnvar_indices())
+		{
+			const auto& splash = new_snap.omnvars[index];
+			if (splash.timeModified != remembered[index].timeModified && (splash.timeModified == 0
+				|| new_snap.serverTime - static_cast<std::int32_t>(splash.timeModified) > SPLASH_MAX_AGE_MSEC))
+			{
+				remembered[index] = splash;
+			}
+		}
 	}
 
 	void handle_vision()
@@ -616,6 +773,13 @@ namespace // hooks
 			}
 		}
 
+		// a jump forward has landed once a snapshot around its target is here (see seek_skips_feed)
+		if (forward_seek.pending && (new_snap.serverTime >= forward_seek.target - REWIND_HUD_LANDED_MSEC
+			|| std::chrono::steady_clock::now() - forward_seek.requested > REWIND_HUD_TIMEOUT))
+		{
+			forward_seek.pending = false;
+		}
+
 		// iw6-theater: the snapshots between a rewind's restart and its target never reach the HUD (see rewind_hud)
 		if (rewind_hud.pending && demo.is_demo_playing() && restart_count != rewind_hud.restarts_at_request)
 		{
@@ -633,8 +797,14 @@ namespace // hooks
 
 			reset_rewind_hud();
 			seek_vision_frames = SEEK_VISION_FRAMES; // the server commands of the landing can still follow this call
+			forget_stale_splashes(client_num, new_snap);
 			CG_UpdateOmnvars_hook.invoke<void>(client_num, &rewind_hud.base, &new_snap);
 			return;
+		}
+
+		if (demo.is_demo_playing())
+		{
+			forget_stale_splashes(client_num, new_snap);
 		}
 
 		CG_UpdateOmnvars_hook.invoke<void>(client_num, &old_snap, &new_snap);
@@ -932,6 +1102,11 @@ namespace // command execution
 			if (msec >= SEEK_VISION_MIN_MSEC)
 			{
 				seek_vision_frames = SEEK_VISION_FRAMES;
+
+				if (*game::mp::connstate == game::CA_ACTIVE) // fast_forward_demo does nothing otherwise
+				{
+					arm_forward_seek(game::mp::cl->serverTime + msec);
+				}
 			}
 
 			fast_forward_demo(static_cast<std::uint32_t>(msec));
@@ -1011,6 +1186,10 @@ namespace demo_playback
 
 			// don't open any menu when demo playback has started
 			CG_UpdateOmnvars_hook.create(game::CG_UpdateOmnvars, control_ui_element);
+
+			// keep the feed lines of the part of the film a seek skips away from the HUD
+			LUI_FeedMessage_hook.create(0x1401CD410, handle_feed_message);
+			LUI_FeedObituary_hook.create(0x1401D0CB0, handle_feed_obituary);
 
 			// allow user to override visual settings
 			CG_VisionSetStartLerp_To_hook.create(0x1402A3200, handle_vision_override);
