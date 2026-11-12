@@ -344,6 +344,7 @@ namespace // demo class
 		retain_timescale_ = {};
 		pred_data_index_ = {};
 		forward_seek.pending = false; // a jump forward that ran into the end of the demo
+		seek_vision_frames = SEEK_VISION_FRAMES; // the demo's commands run again, also at a loop (finish_fog_transitions)
 
 		file_.clear();
 		file_.seekg(post_map_header_file_offset_, std::ios::beg);
@@ -444,6 +445,33 @@ namespace // hooks
 		}
 
 		CG_VisionSetClientSide_hook.invoke<void>(client_num, index, trigger_from, trigger_to, blend, duration);
+	}
+
+	// The fog has transitions of its own. The renderer draws a blend of the server's fog (entry 2, which a fog from the
+	// server reaches from entry 3 to entry 4) and the map's fog of the client side vision set (entry 5), and a server
+	// "no fog" brings the map's fog back between the two times it stamps with the film time (scriptFogLerp*, copied
+	// into entry 5). A rewind restarts the demo, and the restart sends that "no fog" again while the film time is still
+	// the one the rewind left: once the film was back at the target the stamp lay ahead of it, so the map's fog stayed
+	// off until the film got back to where the jump had started (seen in game: the distant towers of Stonehaven sharp
+	// after a jump back, in their haze at the same moment of the film without one, and a video rendered after a jump
+	// back had no fog at all). Like the vision sets, every fog transition the seek runs is finished at once.
+	constexpr std::uintptr_t FOG_SETTINGS = 0x1480E80F4; // GfxFog[8] of local client 0 (0x4C bytes each)
+	constexpr std::size_t FOG_SETTINGS_SIZE = 0x4C;
+	constexpr std::size_t FOG_START_TIME = 0x38;
+	constexpr std::size_t FOG_FINISH_TIME = 0x3C;
+
+	void finish_fog_transitions()
+	{
+		auto& cvs_data = game::mp::cg->cvsData;
+		cvs_data.scriptFogLerpStartTime = 0;
+		cvs_data.scriptFogLerpEndTime = 0;
+
+		for (const std::size_t entry : {4, 5})
+		{
+			const auto fog = FOG_SETTINGS + entry * FOG_SETTINGS_SIZE;
+			*reinterpret_cast<std::int32_t*>(fog + FOG_START_TIME) = 0;
+			*reinterpret_cast<std::int32_t*>(fog + FOG_FINISH_TIME) = 0;
+		}
 	}
 
 	// The feed lines of the part of the film a seek skips (see seek_skips_feed): a game message (CG_GameMessage and
@@ -661,6 +689,11 @@ namespace // hooks
 			handle_demo_patches();
 
 			demo.parse_demo_wrapper();
+
+			if (seek_vision_instant())
+			{
+				finish_fog_transitions();
+			}
 		}
 	}
 
