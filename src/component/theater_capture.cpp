@@ -552,6 +552,11 @@ namespace theater_capture
 		frames_held.store(std::max(0, still_held), std::memory_order_release);
 	}
 
+	bool holding_frames()
+	{
+		return frames_held.load(std::memory_order_acquire) != 0;
+	}
+
 	engine_window read_engine_window()
 	{
 		static const auto readable = utils::hook::is_readable(reinterpret_cast<const void*>(R_WINDOW_COUNT),

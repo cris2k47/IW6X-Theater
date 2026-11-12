@@ -1168,8 +1168,10 @@ namespace theater
 				// a backward seek restarts the demo from its beginning and runs it forward to the target: for a frame or
 				// two the screen would show the demo's start (measured: CA_ACTIVE at its first snapshot, then the target
 				// time with snapshots from the start). Those frames are not presented (on_frame lets them through again
-				// once the demo is back at the target). Not while a video is rendered: it waits for the seek itself.
-				if (demo_playback::playing() && render == render_phase::none)
+				// once the demo is back at the target). The seek to the start of a clip before a video render too: the
+				// restart showed on screen as the loading screen without its picture, a checkerboard, for two frames
+				// (seen in game); update_render waits for the frames to be presented again.
+				if (demo_playback::playing())
 				{
 					theater_capture::hold_frames();
 					backward_seek_target = game::mp::cl->serverTime + msec;
@@ -2108,12 +2110,14 @@ namespace theater
 				++render_seek_frames;
 
 				// the film is paused while the seek lands (a rewind restarts the demo internally); this must not
-				// depend on real time: with the fixed clock the film can run many times faster than real time
+				// depend on real time: with the fixed clock the film can run many times faster than real time.
+				// A rewind's frames are not presented (seek_relative): the film waits until they are again, so the
+				// capture, which only sees presented frames, never starts on a held one
 				if (paused)
 				{
 					const auto server = static_cast<double>(game::mp::cl->serverTime);
 					const auto landed = render_seek_frames >= 3 && server >= render_seek_target - 200.0 && server <= render_start + 50.0;
-					if (landed)
+					if (landed && !backward_seek_target && !theater_capture::holding_frames())
 					{
 						paused = false; // run the pre-roll with the fixed clock
 					}

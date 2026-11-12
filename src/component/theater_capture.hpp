@@ -54,6 +54,7 @@ namespace theater_capture
 	// or two after the main thread built it). Without the hook nothing is held.
 	void hold_frames();
 	void release_frames(int still_held);
+	[[nodiscard]] bool holding_frames(); // some of the game's frames are still not presented (any thread)
 
 	// entry 0 of the engine's window table, all zero while it is not available
 	struct engine_window
