@@ -32,7 +32,8 @@
 //
 // Camera override: CG_CalcViewValues (0x14029F980, called from CG_DrawActiveFrame) fills cg->refdef and
 // cg->refdefViewAngles. After it returns, the theater writes its own origin/axis/fov into the refdef, so
-// everything that consumes the view afterwards (FX camera, sound listener, culling, renderer) uses it.
+// everything that consumes the view afterwards (FX camera, sound listener, culling, renderer) uses it. The level
+// of detail of the models is the exception: its origin is set at the start of the frame (set_lod_origin_stub).
 
 namespace theater
 {
@@ -43,6 +44,7 @@ namespace theater
 		// ------------------------------------------------------------------ engine data (iw6mp64_ship.exe 3.15)
 
 		constexpr std::uintptr_t CG_CALC_VIEW_VALUES = 0x14029F980;
+		constexpr std::uintptr_t R_SET_LOD_ORIGIN = 0x14060D490; // void(const refdef_t* refdef, float lodScale)
 		constexpr std::uintptr_t FOV_TO_TANGENTS = 0x1404E2A80; // void(float fov, float aspect, float* tanX, float* tanY)
 		constexpr std::uintptr_t CG_ARRAY = 0x14176EC00;
 
@@ -99,6 +101,7 @@ namespace theater
 		// ------------------------------------------------------------------ state
 
 		utils::hook::detour cg_calc_view_values_hook;
+		utils::hook::detour r_set_lod_origin_hook;
 		utils::hook::detour cl_key_event_hook;
 		utils::hook::detour cl_mouse_event_hook;
 
@@ -128,6 +131,7 @@ namespace theater
 		bool follow_valid = false;
 		camera_pose last_pose{};
 		bool last_pose_valid = false;
+		bool camera_written = false; // the theater placed the camera in the last frame that was drawn (write_pose)
 
 		// death hold (demo_pov::held_record): the dead camera stays where it was when the hold started
 		constexpr int HOLD_POSE_SETTLE_FRAMES = 3;   // frames of a new hold (or after a seek) that still take the engine's pose
@@ -848,6 +852,33 @@ namespace theater
 
 			last_pose = pose;
 			last_pose_valid = true;
+			camera_written = true;
+		}
+
+		// The renderer picks the level of detail of every model by its distance to the LOD origin, and
+		// CG_DrawActiveFrame sets that at the start of the frame (0x140299987, long before CG_CalcViewValues) from the
+		// view of the recorded player. The theater's cameras are somewhere else, so a player far from where the
+		// recorder was got its lowest detail however close the camera came: no weapon in its hands (a weapon's last
+		// level is nothing at all) and a head of a few flat polygons (seen in game in 3rd person and in the free
+		// camera, from about 1500 and 2500 units). While the theater places the camera, the level of detail is taken
+		// from where it was, and with its field of view, in the previous frame.
+		void set_lod_origin_stub(refdef_view* refdef, const float lod_scale)
+		{
+			if (!camera_written || !last_pose_valid || refdef != get_refdef() || !active())
+			{
+				r_set_lod_origin_hook.invoke<void>(refdef, lod_scale);
+				return;
+			}
+
+			// for this call only: the engine keeps working with its own view until CG_CalcViewValues
+			const auto engine_view = *refdef;
+			refdef->vieworg[0] = static_cast<float>(last_pose.pos.x);
+			refdef->vieworg[1] = static_cast<float>(last_pose.pos.y);
+			refdef->vieworg[2] = static_cast<float>(last_pose.pos.z);
+			fov_to_tangents(static_cast<float>(last_pose.fov), &refdef->tan_half_fov_x, &refdef->tan_half_fov_y);
+
+			r_set_lod_origin_hook.invoke<void>(refdef, lod_scale);
+			*refdef = engine_view;
 		}
 
 		camera_pose current_view_pose()
@@ -2837,6 +2868,7 @@ namespace theater
 		{
 			cg_calc_view_values_hook.invoke<void>(local_client_num);
 
+			camera_written = false; // until write_pose places the camera of this frame
 			if (!active())
 			{
 				return;
@@ -3547,6 +3579,7 @@ namespace theater
 			                                                "Render the video when a clip is saved (Keep Clip)");
 
 			cg_calc_view_values_hook.create(CG_CALC_VIEW_VALUES, calc_view_values_stub);
+			r_set_lod_origin_hook.create(R_SET_LOD_ORIGIN, set_lod_origin_stub);
 			stats_write_needed_hook.create(LIVESTORAGE_STATS_WRITE_NEEDED, stats_write_needed_stub);
 			snd_update_master_volume_hook.create(SND_UPDATE_MASTER_VOLUME, snd_update_master_volume_stub);
 			cl_key_event_hook.create(game::CL_KeyEvent.get(), cl_key_event_stub);
